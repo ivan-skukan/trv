@@ -5,6 +5,8 @@ import open3d as o3d
 def load_velodyne_points(filename):
     """Load point cloud from KITTI .bin file"""
     points = np.fromfile(filename, dtype=np.float32).reshape(-1, 4)
+    print("Shape:")
+    print(points.shape)
     return points  # Returns [x, y, z, reflectance]
 
 def visualize_point_cloud_o3d(points, downsample_voxel=0.1):
