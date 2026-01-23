@@ -1,5 +1,3 @@
-from os import error
-from flask.config import T
 import numpy as np
 from scipy.spatial import KDTree
 
@@ -31,8 +29,8 @@ def RANSAC_allignment(Y, Y_gt):
     """RANSAC to find the best transformation aligning Y to Y_gt."""
     max_inliers = 0
     best_T = np.eye(4)
-    num_iterations = 100 # idk lol
-    threshold = 0.1 # also dont know lol
+    num_iterations = 1 # idk lol
+    threshold = 0.2 # also dont know lol
     N = Y.shape[0]
     for _ in range(num_iterations):
         indices = np.random.choice(N, 3, replace=False)
@@ -61,7 +59,7 @@ def closest_points(X, Y):
     return Y_closest
 
 
-def ICP(X, Y_gt, max_iterations=1000, epsilon=1e-6):
+def ICP(X, Y_gt, max_iterations=20, epsilon=1e-6):
     """Iterative Closest Point algorithm to align point cloud X to Y_gt."""
     convergence = False
     last_error = float('inf')
@@ -71,6 +69,7 @@ def ICP(X, Y_gt, max_iterations=1000, epsilon=1e-6):
         Y = (T[:3, :3] @ X.T).T + T[:3, 3]
         Y_closest = closest_points(Y, Y_gt)
         dT = RANSAC_allignment(Y, Y_closest)
+        print("dT norm:", np.linalg.norm(dT[:3, :3] - np.eye(3)), np.linalg.norm(dT[:3, 3]))
         T = dT @ T
         
         error = np.mean(np.linalg.norm(T[:3, :3] @ X.T + T[:3, 3][:, np.newaxis] - Y_closest.T, axis=0))

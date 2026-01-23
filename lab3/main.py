@@ -27,16 +27,20 @@ def main_loop(all_points):
     return C
 
 
-
-
 def main():
-    folder = "dataset/sequences/00/velodyne/"
+    folder = "lab3/dataset/sequences/00/velodyne/"
     files = sorted(os.listdir(folder))
     all_points = []
-    for file in files:
+    for file in files[:20]:
         if file.endswith(".bin"):
             points = load_velodyne_points(os.path.join(folder, file))
+            print(f"Loaded {file} with shape {points.shape}")
             all_points.append(points)
-
+    print(f"Loaded {len(all_points)} point clouds.")
     transformations = main_loop(all_points)
     
+    for i, T in enumerate(transformations):
+        print(f"Transformation {i}:\n{T}\n")
+
+if __name__ == "__main__":
+    main()
