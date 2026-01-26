@@ -1,6 +1,9 @@
 import numpy as np
 from scipy.spatial import KDTree
 
+RANSAC_ITERATIONS = 200
+RANSAC_THRESHOLD = 0.2
+
 
 def T_minimizer(p, q):
     """Extracts rotation matrix R and translation vector t from known correspondences."""
@@ -28,9 +31,10 @@ def T_minimizer(p, q):
 def RANSAC_allignment(Y, Y_gt):
     """RANSAC to find the best transformation aligning Y to Y_gt."""
     max_inliers = 0
+    best_inliers = None
     best_T = np.eye(4)
-    num_iterations = 1 # idk lol
-    threshold = 0.2 # also dont know lol
+    num_iterations = RANSAC_ITERATIONS
+    threshold = RANSAC_THRESHOLD
     N = Y.shape[0]
     for _ in range(num_iterations):
         indices = np.random.choice(N, 3, replace=False)
@@ -46,8 +50,14 @@ def RANSAC_allignment(Y, Y_gt):
         num_inliers = np.sum(inliers)
         if num_inliers > max_inliers:
             max_inliers = num_inliers
+            best_inliers = inliers
             best_T[:3, :3] = R
             best_T[:3, 3] = t
+
+    if best_inliers is not None and np.sum(best_inliers) >= 3:
+        R, t = T_minimizer(Y[best_inliers], Y_gt[best_inliers])
+        best_T[:3, :3] = R
+        best_T[:3, 3] = t
 
     return best_T
 
@@ -59,11 +69,11 @@ def closest_points(X, Y):
     return Y_closest
 
 
-def ICP(X, Y_gt, max_iterations=20, epsilon=1e-6):
+def ICP(X, Y_gt, max_iterations=20, epsilon=1e-6, T_init=None):
     """Iterative Closest Point algorithm to align point cloud X to Y_gt."""
     convergence = False
     last_error = float('inf')
-    T = np.eye(4)
+    T = np.eye(4) if T_init is None else T_init.copy()
 
     while not convergence and max_iterations > 0:
         Y = (T[:3, :3] @ X.T).T + T[:3, 3]
@@ -72,7 +82,9 @@ def ICP(X, Y_gt, max_iterations=20, epsilon=1e-6):
         print("dT norm:", np.linalg.norm(dT[:3, :3] - np.eye(3)), np.linalg.norm(dT[:3, 3]))
         T = dT @ T
         
-        error = np.mean(np.linalg.norm(T[:3, :3] @ X.T + T[:3, 3][:, np.newaxis] - Y_closest.T, axis=0))
+        Y_new = (T[:3, :3] @ X.T).T + T[:3, 3]
+        Y_closest = closest_points(Y_new, Y_gt)
+        error = np.mean(np.linalg.norm(Y_new - Y_closest, axis=1))
         print(f"Current error: {error}")
         if abs(last_error - error) < epsilon:
             convergence = True
