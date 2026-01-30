@@ -1,3 +1,4 @@
+# solver.py
 import numpy as np
 from scipy.spatial import KDTree
 
@@ -6,8 +7,8 @@ RANSAC_THRESHOLD = 0.2
 
 
 def T_minimizer(p, q):
-    """Extracts rotation matrix R and translation vector t from known correspondences."""
-    assert p.shape == q.shape and p.shape[1] == 3, "Input point sets must be of shape (N, 3)"
+    if p.shape != q.shape or p.ndim != 2 or p.shape[1] != 3:
+        raise ValueError("p and q must be (N,3) with matching shapes")
 
     p_centroid = np.mean(p, axis=0)
     q_centroid = np.mean(q, axis=0)
@@ -16,78 +17,89 @@ def T_minimizer(p, q):
     q_centered = q - q_centroid
 
     H = p_centered.T @ q_centered
-
-    U, S, Vt = np.linalg.svd(H)
+    U, _, Vt = np.linalg.svd(H)
     R = Vt.T @ U.T
 
     if np.linalg.det(R) < 0:
         Vt[2, :] *= -1
         R = Vt.T @ U.T
-    
-    t = q_centroid - R @ p_centroid
 
+    t = q_centroid - R @ p_centroid
     return R, t
 
-def RANSAC_allignment(Y, Y_gt):
-    """RANSAC to find the best transformation aligning Y to Y_gt."""
-    max_inliers = 0
-    best_inliers = None
+
+def RANSAC_alignment(src_pts, dst_pts):
+    if src_pts.shape != dst_pts.shape or src_pts.ndim != 2 or src_pts.shape[1] != 3:
+        raise ValueError("src_pts and dst_pts must be (N,3) with matching shapes")
+
+    N = src_pts.shape[0]
+    if N < 3:
+        return np.eye(4), np.zeros((0,), dtype=bool)
+
     best_T = np.eye(4)
-    num_iterations = RANSAC_ITERATIONS
-    threshold = RANSAC_THRESHOLD
-    N = Y.shape[0]
-    for _ in range(num_iterations):
-        indices = np.random.choice(N, 3, replace=False)
-        p_sample = Y[indices]
-        q_sample = Y_gt[indices]
+    best_inliers = np.zeros((N,), dtype=bool)
+    max_inliers = 0
 
-        R, t = T_minimizer(p_sample, q_sample)
+    thr = float(RANSAC_THRESHOLD)
+    iters = int(RANSAC_ITERATIONS)
 
-        Y_transformed = (R @ Y.T).T + t
+    for _ in range(iters):
+        idx = np.random.choice(N, 3, replace=False)
+        p = src_pts[idx]
+        q = dst_pts[idx]
 
-        distances = np.linalg.norm(Y_transformed - Y_gt, axis=1)
-        inliers = distances < threshold
-        num_inliers = np.sum(inliers)
-        if num_inliers > max_inliers:
-            max_inliers = num_inliers
+        R, t = T_minimizer(p, q)
+        src_tf = (R @ src_pts.T).T + t
+        d = np.linalg.norm(src_tf - dst_pts, axis=1)
+
+        inliers = d < thr
+        nin = int(np.sum(inliers))
+        if nin > max_inliers:
+            max_inliers = nin
             best_inliers = inliers
             best_T[:3, :3] = R
             best_T[:3, 3] = t
 
-    if best_inliers is not None and np.sum(best_inliers) >= 3:
-        R, t = T_minimizer(Y[best_inliers], Y_gt[best_inliers])
+    if max_inliers >= 3:
+        R, t = T_minimizer(src_pts[best_inliers], dst_pts[best_inliers])
         best_T[:3, :3] = R
         best_T[:3, 3] = t
 
-    return best_T
+    return best_T, best_inliers
 
-def closest_points(X, Y):
-    """Finds the closest points in Y for each point in X."""
-    tree = KDTree(Y)
+
+def closest_points(tree, X):
     distances, indices = tree.query(X)
-    Y_closest = Y[indices]
-    return Y_closest
+    return distances, indices
 
 
-def ICP(X, Y_gt, max_iterations=20, epsilon=1e-6, T_init=None):
-    """Iterative Closest Point algorithm to align point cloud X to Y_gt."""
-    convergence = False
-    last_error = float('inf')
+def ICP(X, Y, max_iterations=20, epsilon=1e-6, T_init=None, min_inliers=200, min_inlier_ratio=0.05):
     T = np.eye(4) if T_init is None else T_init.copy()
+    tree = KDTree(Y)
 
-    while not convergence and max_iterations > 0:
-        Y = (T[:3, :3] @ X.T).T + T[:3, 3]
-        Y_closest = closest_points(Y, Y_gt)
-        dT = RANSAC_allignment(Y, Y_closest)
-        print("dT norm:", np.linalg.norm(dT[:3, :3] - np.eye(3)), np.linalg.norm(dT[:3, 3]))
+    last_error = float("inf")
+    ok = True
+
+    for _ in range(int(max_iterations)):
+        X_tf = (T[:3, :3] @ X.T).T + T[:3, 3]
+        _, nn_idx = closest_points(tree, X_tf)
+        Y_match = Y[nn_idx]
+
+        dT, inliers = RANSAC_alignment(X_tf, Y_match)
+        nin = int(np.sum(inliers))
+        if nin < int(min_inliers) or nin / float(len(X_tf)) < float(min_inlier_ratio):
+            ok = False
+            break
+
         T = dT @ T
-        
-        Y_new = (T[:3, :3] @ X.T).T + T[:3, 3]
-        Y_closest = closest_points(Y_new, Y_gt)
-        error = np.mean(np.linalg.norm(Y_new - Y_closest, axis=1))
-        print(f"Current error: {error}")
-        if abs(last_error - error) < epsilon:
-            convergence = True
+
+        X_tf_new = (T[:3, :3] @ X.T).T + T[:3, 3]
+        _, nn_idx_new = closest_points(tree, X_tf_new)
+        Y_match_new = Y[nn_idx_new]
+        error = float(np.mean(np.linalg.norm(X_tf_new - Y_match_new, axis=1)))
+
+        if abs(last_error - error) < float(epsilon):
+            break
         last_error = error
-        max_iterations -= 1
-    return T
+
+    return T, ok
